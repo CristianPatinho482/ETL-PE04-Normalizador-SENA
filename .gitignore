@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+htmlcov/
+
+# Entradas y salidas operativas (no versionar datos generados)
+data/curated/
+data/curated_run/
+reports/
+
+# Datos institucionales y documentos de trabajo
+*.xlsx
+*.xls
+*.xlsm
+*.docx
+!especificacion-formal-etl-pe04.docx
+
+# Office
+~$*.xlsx
+~$*.docx
