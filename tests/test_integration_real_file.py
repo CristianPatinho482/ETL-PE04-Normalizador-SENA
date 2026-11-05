@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from pe04_etl.normalize import parse_decimal, parse_integer
+from pe04_etl.normalize import parse_hours, parse_integer
 from pe04_etl.pipeline import run_pipeline
 from pe04_etl.quality import build_quality_report
 
@@ -42,7 +42,7 @@ def test_real_pe04_sums_reconcile_with_source(real_source: Path, tmp_path):
     source_act = sum(
         parse_integer(value)[0] or 0 for value in source["TOTAL_APRENDICES_ACTIVOS"]
     )
-    source_hours = sum(parse_decimal(value)[0] or 0 for value in source["TOTAL_HORAS"])
+    source_hours = sum(parse_hours(value)[0] or 0 for value in source["TOTAL_HORAS"])
 
     assert int(curated["APRENDICES_MATRICULADOS"].sum()) == source_mat
     assert int(curated["APRENDICES_ACTIVOS"].sum()) == source_act

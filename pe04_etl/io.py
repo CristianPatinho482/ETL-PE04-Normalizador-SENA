@@ -1,7 +1,7 @@
-"""Lectura y extracción de la tabla PE-04 desde XLSX/CSV.
+"""Lectura y extracción de la tabla PE-04 desde XLSX/CSV/XML.
 
-Maneja cabeceras desplazadas, BOM, codificaciones Latin-1/UTF-8, delimitadores
-y filas fantasma de Microsoft Office.
+Maneja cabeceras desplazadas, BOM, codificaciones Latin-1/UTF-8, delimitadores,
+libros SpreadsheetML 2003 y filas fantasma de Microsoft Office.
 """
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import io
 import re
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -18,9 +19,11 @@ import pandas as pd
 from .contracts import ContractViolation, precondition
 from .text import clean_text, is_blank_row
 
-SUPPORTED_SUFFIXES = {".csv", ".xlsx", ".xlsm"}
+SUPPORTED_SUFFIXES = {".csv", ".xlsx", ".xlsm", ".xml"}
 GHOST_PREFIXES = ("~$",)
 GHOST_SUFFIXES = (".tmp",)
+SS_NS = "urn:schemas-microsoft-com:office:spreadsheet"
+SS = f"{{{SS_NS}}}"
 
 HEADER_SIGNATURES = {
     "IDENTIFICADOR_FICHA",
@@ -133,6 +136,92 @@ def _read_excel(path: Path) -> RawTable:
     )
 
 
+def _xml_cell_value(cell: ET.Element) -> str | None:
+    """Extrae el texto de una celda SpreadsheetML 2003.
+
+    Se conserva como texto para no perder ceros a la izquierda ni precisión
+    decimal; las capas de normalización se encargan de convertir los tipos.
+    """
+    data = cell.find(f"{SS}Data")
+    if data is None:
+        return None
+    text = "".join(data.itertext())
+    return text if text != "" else None
+
+
+def _read_excel_xml(path: Path) -> RawTable:
+    """Lee un libro Excel 2003 XML (SpreadsheetML).
+
+    Este es el formato que exporta Sofía Plus para algunos reportes PE-04.
+    Se reconstruye la matriz respetando ``ss:Index`` y ``ss:MergeAcross`` para
+    que la detección de cabecera y la normalización funcionen igual que con
+    XLSX o CSV.
+    """
+    try:
+        root = ET.parse(path).getroot()
+    except ET.ParseError as exc:
+        raise ContractViolation("P", f"XML inválido en '{path.name}': {exc}") from exc
+
+    worksheets = root.findall(f"{SS}Worksheet")
+    precondition(
+        bool(worksheets),
+        f"El XML '{path.name}' no contiene hojas de cálculo SpreadsheetML.",
+    )
+    worksheet = next(
+        (sheet for sheet in worksheets if sheet.find(f"{SS}Table") is not None),
+        None,
+    )
+    precondition(
+        worksheet is not None,
+        f"El XML '{path.name}' no contiene una tabla de datos.",
+    )
+    assert worksheet is not None
+    table = worksheet.find(f"{SS}Table")
+    precondition(table is not None, f"El XML '{path.name}' no contiene una tabla válida.")
+    assert table is not None
+
+    rows: list[list[str | None]] = []
+    for row in table.findall(f"{SS}Row"):
+        row_index = row.get(f"{SS}Index")
+        target_row = int(row_index) - 1 if row_index else len(rows)
+        while len(rows) <= target_row:
+            rows.append([])
+        if rows[target_row]:
+            target_row = len(rows)
+            rows.append([])
+
+        values: list[str | None] = []
+        for cell in row.findall(f"{SS}Cell"):
+            cell_index = cell.get(f"{SS}Index")
+            target_cell = int(cell_index) - 1 if cell_index else len(values)
+            while len(values) < target_cell:
+                values.append(None)
+            values.append(_xml_cell_value(cell))
+            merge_across = int(cell.get(f"{SS}MergeAcross", "0") or 0)
+            values.extend([None] * merge_across)
+        rows[target_row] = values
+
+    declared_columns = int(table.get(f"{SS}ExpandedColumnCount", "0") or 0)
+    declared_rows = int(table.get(f"{SS}ExpandedRowCount", "0") or 0)
+    width = max(declared_columns, max((len(values) for values in rows), default=0), 1)
+    while len(rows) < declared_rows:
+        rows.append([])
+    for values in rows:
+        values.extend([None] * (width - len(values)))
+
+    frame = pd.DataFrame(rows, dtype=object)
+    return RawTable(
+        frame=frame,
+        kind="xml",
+        encoding="utf-8",
+        delimiter=None,
+        sheet_name=worksheet.get(f"{SS}Name"),
+        path=path,
+        sha256=sha256_file(path),
+        size_bytes=path.stat().st_size,
+    )
+
+
 def _detect_encoding(data: bytes) -> str:
     if data.startswith(b"\xef\xbb\xbf"):
         return "utf-8-sig"
@@ -207,11 +296,67 @@ def _read_csv(path: Path) -> RawTable:
     )
 
 
+def discover_sources(
+    source_path: str | Path,
+    *,
+    recursive: bool = True,
+    exclude_dirs: tuple[str | Path, ...] = (),
+) -> list[Path]:
+    """Devuelve los archivos PE-04 de un archivo o carpeta.
+
+    En modo carpeta se ignoran archivos fantasma de Office, extensiones no
+    soportadas, directorios ocultos y el directorio de salida para evitar
+    reprocesar los CSV generados por el propio ETL.
+    """
+    source = Path(source_path)
+    precondition(source.exists(), f"La ruta fuente no existe: {source}")
+
+    if source.is_file():
+        _check_source(source)
+        return [source]
+
+    precondition(source.is_dir(), f"La ruta fuente no es archivo ni carpeta: {source}")
+    excluded = tuple(Path(directory).resolve() for directory in exclude_dirs if directory)
+
+    candidates = source.rglob("*") if recursive else source.iterdir()
+    files: list[Path] = []
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        relative_parts = candidate.relative_to(source).parts
+        if any(part.startswith(".") for part in relative_parts):
+            continue
+        if candidate.suffix.lower() not in SUPPORTED_SUFFIXES:
+            continue
+        if candidate.name.startswith(GHOST_PREFIXES):
+            continue
+        if candidate.name.lower().endswith(GHOST_SUFFIXES):
+            continue
+        resolved = candidate.resolve()
+        if any(
+            resolved == directory or resolved.is_relative_to(directory)
+            for directory in excluded
+        ):
+            continue
+        files.append(candidate)
+
+    files.sort(key=lambda path: (path.name.lower(), str(path).lower()))
+    precondition(
+        bool(files),
+        f"No se encontraron archivos PE-04 ({', '.join(sorted(SUPPORTED_SUFFIXES))}) "
+        f"en la carpeta: {source}",
+    )
+    return files
+
+
 def read_raw_table(path: str | Path) -> RawTable:
     source = Path(path)
     _check_source(source)
-    if source.suffix.lower() == ".csv":
+    suffix = source.suffix.lower()
+    if suffix == ".csv":
         return _read_csv(source)
+    if suffix == ".xml":
+        return _read_excel_xml(source)
     return _read_excel(source)
 
 

@@ -9,9 +9,10 @@ convierte las reglas de validación en evidencia visual.
 
 | Nivel | Qué verifica | Herramienta | Archivo |
 |---|---|---|---|
-| Unitarias | Parsing de celdas compuestas, números localizados, periodos, jornadas, limpieza de texto | `pytest` | `tests/test_parsing.py` |
+| Unitarias | Parsing de celdas compuestas, números localizados, duraciones de Excel, periodos, jornadas, limpieza de texto | `pytest` | `tests/test_parsing.py` |
 | Contrato (Hoare) | Precondiciones `{P}`, postcondiciones `{Q}` e invariantes del resultado | `pytest` + `ContractViolation` | `tests/test_contracts.py` |
-| Integración | XLSX/CSV reales y sintéticos, cabeceras desplazadas, BOM, Latin-1, filas en blanco | `pytest`, `openpyxl`, `pandas` | `tests/test_header_detection.py`, `tests/test_integration_real_file.py` |
+| Integración | XLSX/CSV/XML reales y sintéticos, cabeceras desplazadas, BOM, Latin-1, filas en blanco | `pytest`, `openpyxl`, `pandas` | `tests/test_header_detection.py`, `tests/test_xml_source.py`, `tests/test_integration_real_file.py` |
+| Lote | Descubrimiento de archivos, particiones por periodo, conflictos, `--fail-fast` y manifiesto | `pytest` | `tests/test_batch.py` |
 | Propiedades | Idempotencia `f(f(x)) = f(x)`, estabilidad del UUID, dominios | `hypothesis` | `tests/test_idempotence.py` |
 | Regresión | Misma entrada ⇒ mismos bytes de salida y mismo SHA-256 | `pytest` | `tests/test_idempotence.py`, `tests/test_persistence.py` |
 | Persistencia | Escritura atómica, `os.replace`, BOM, sidecar SHA-256, cuarentena de temporales | `pytest` + `monkeypatch` | `tests/test_persistence.py` |
@@ -30,11 +31,18 @@ convierte las reglas de validación en evidencia visual.
 | — | Fichas duplicadas / grano dimensional | `test_duplicate_ficha_is_a_critical_failure`, `test_dq17_detects_same_ficha_with_two_programs` |
 | — | Persistencia atómica | `test_atomic_write_preserves_previous_file_if_serialization_fails`, `test_atomic_write_cleans_temp_if_rename_fails` |
 | — | Reconciliación fuente → curado | `test_real_pe04_sums_reconcile_with_source`, `test_dq14_detects_tampered_aggregate` |
+| — | XML SpreadsheetML 2003 | `test_excel_xml_is_read_with_header_and_shape`, `test_excel_xml_pipeline_infers_period_from_preamble`, `test_excel_xml_quality_dq14_reconciles_durations` |
+| — | Duraciones de Excel (`HH:MM`, `HHH:MM`, ISO) | `test_parse_hours_accepts_excel_and_csv_durations`, `test_parse_hours_converts_minutes_not_centesimal_hours`, `test_parse_hours_rejects_invalid_or_non_duration_values` |
+| — | Periodo por preámbulo y abreviaturas | `test_period_from_preamble_reads_period_before_header`, `test_period_from_filename[JUN/ENERO/SEP/DIC]` |
+| — | Lote multiperiodo en particiones `YYYYMM` | `test_run_batch_processes_each_period_in_its_partition`, `test_run_batch_non_recursive_ignores_subfolders` |
+| — | Conflicto por periodo duplicado | `test_duplicate_period_marks_conflict_and_skips_partition` |
+| — | Tolerancia a errores y `--fail-fast` | `test_run_batch_continues_after_a_broken_file`, `test_run_batch_fail_fast_stops_after_first_error` |
+| — | Carpeta vacía y exclusión de salidas previas | `test_run_batch_empty_folder_violates_precondition`, `test_run_batch_excludes_previous_outputs_from_next_run` |
 
 ## 3. Comandos
 
 ```powershell
-# Suite completa (117 pruebas)
+# Suite completa (161 pruebas recolectadas)
 python -m pytest
 
 # Solo integración contra el archivo real
@@ -43,19 +51,26 @@ python -m pytest -m integration
 # Cobertura
 python -m pytest --cov=pe04_etl --cov-report=term-missing
 
-# Ejecutar el ETL
+# Ejecutar el ETL por archivo o por carpeta
 python etl_pe04_normalizer.py
+python etl_pe04_normalizer.py --source "PE04"
 
-# Generar el tablero de calidad
+# Generar el tablero de calidad por archivo o por carpeta
 python pe04_quality_dashboard.py
+python pe04_quality_dashboard.py --source "PE04"
 ```
 
-Resultado de referencia con `PE-04_mayo 2026.xlsx`:
+Resultado de referencia:
 
-- 117 pruebas aprobadas.
-- Cobertura de `pe04_etl`: **92 %** (líneas).
-- 453 registros curados, 0 rechazados, 109 horas redondeadas de 6 a 2 decimales.
-- 23 reglas de calidad aplicables, 23 aprobadas, 0 fallos críticos.
+- 161 pruebas recolectadas; 156 con datos sintéticos y 5 de integración que se
+  omiten automáticamente si `PE-04_mayo 2026.xlsx` no está en la raíz.
+- Cobertura de `pe04_etl`: 91 % (líneas).
+- 453 registros curados desde `PE-04_mayo 2026.xlsx`, 0 rechazados, 109 horas
+  redondeadas de 6 a 2 decimales; 23/23 reglas aprobadas.
+- 529 registros curados desde `PE-04_JUN 2026.xml`, 0 rechazados, 123 horas
+  redondeadas; 23/23 reglas aprobadas, estado APTO.
+- El XML y el CSV de junio producen exactamente los mismos UUID y el mismo
+  total de horas (63,871.69), lo que confirma la equivalencia entre formatos.
 
 ## 4. Qué cubre cada tipo de prueba
 
@@ -65,10 +80,16 @@ Se prueban funciones puras sin filesystem ni estado global:
 
 - `parse_decimal`: `"116,5666667"`, `"1.234,56"`, `"(1.234,56)"`, `"N/A"`.
 - `parse_integer`: `"1.234"` → `1234`, `"26.0"` → `26`, `"116,56"` → error.
-- `quantize_hours`: `"1,005"` → `1.01` con `ROUND_HALF_UP`.
+- `parse_hours`: `"20:00"` → `20`, `"144:00"` → `144`, `"39:50"` → `39.83`,
+  `"1899-12-31T20:00:00.000"` → `20`, `timedelta(hours=144)` → `144`.
+- `quantize_hours`: `"1,005"` → `1.01` con `ROUND_HALF_UP`; una duración
+  `"39:50"` se cuantiza a `39.83` y se marca como redondeada.
 - `parse_composite`: mayúsculas, NBSP, guiones bajos internos y formatos inválidos.
 - `parse_period`: `202605`, `2026-05`, `05/2026`, meses inválidos.
-- `period_from_filename`: `PE-04_mayo 2026.xlsx` → `202605`.
+- `period_from_filename`: `PE-04_mayo 2026.xlsx` → `202605`,
+  `PE-04_JUN 2026.xml` → `202606`.
+- `period_from_preamble`: recupera `202606` de una celda suelta antes de la
+  cabecera y no confunde fichas de 6–8 dígitos con periodos.
 
 ### 4.2 Contrato
 
@@ -84,13 +105,17 @@ Cada ejecución verifica:
 
 ### 4.3 Integración
 
-Los fixtures generan XLSX/CSV reales con `openpyxl` y `csv`, incluyendo:
+Los fixtures generan XLSX/CSV/XML reales con `openpyxl`, `csv` y
+`xml.sax.saxutils`, incluyendo:
 
 - Cabecera en filas 0, 1, 2, 3 y 4.
 - Preámbulos institucionales con una firma suelta para evitar falsos positivos.
 - BOM UTF-8, Latin-1/CP1252 y delimitadores `;` y `,`.
 - Filas completamente vacías y columnas duplicadas.
-- Archivos fantasma `~$...` y extensiones no soportadas.
+- Libros SpreadsheetML 2003 con hoja `Reporte`, celdas `ss:Type="DateTime"` y
+  periodos en el preámbulo.
+- Carpetas con varios periodos, subcarpetas, archivos fantasma `~$...`,
+  archivos corruptos y periodos duplicados.
 
 ### 4.4 Propiedades (Hypothesis)
 
@@ -153,8 +178,20 @@ reports/PE04/202605/pe04_quality_report.json
    (`OK`/`REVISAR`). Los detalles de cada hallazgo van a
    `pe04_auditoria.csv`, una fila por regla incumplida, para no introducir
    atributos multivaluados en la tabla 1FN.
-5. **CSV y XLSX.** El módulo acepta ambos formatos; el archivo operativo actual
-   es XLSX, pero la especificación menciona CSV y se soportan ambos.
+5. **CSV, XLSX y XML 2003.** El módulo acepta los tres formatos porque los
+   reportes operativos de Sofía Plus aparecen en más de una exportación. El XML
+   se lee como SpreadsheetML 2003 (`ss:Table`, `ss:Row`, `ss:Cell`), no como
+   HTML ni como libro moderno.
+6. **Duraciones en `TOTAL_HORAS`.** Un valor `20:00` no es un decimal `20.00`
+   ni un porcentaje: es una duración de 20 horas. El XML lo representa como
+   `1899-12-31T20:00:00.000` y el CSV como `HH:MM`. `parse_hours` normaliza
+   ambas formas antes de cuantizar; `parse_decimal` se conserva para métricas
+   decimales convencionales.
+7. **Periodo en lote.** El periodo se infiere del preámbulo (donde el XML lo
+   declara) y, si no existe, del nombre del archivo. Si dos archivos declaran
+   el mismo periodo, el lote los marca `CONFLICT` y omite la partición en vez
+   de sobrescribir silenciosamente. La decisión queda registrada en
+   `pe04_batch_manifest.json`.
 
 ## 6. Pruebas adicionales recomendadas (opcionales)
 

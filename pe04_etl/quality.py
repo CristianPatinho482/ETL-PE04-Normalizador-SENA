@@ -15,7 +15,7 @@ from .io import sha256_file
 from .normalize import (
     has_residual_composite,
     make_record_uuid,
-    parse_decimal,
+    parse_hours,
     parse_integer,
     parse_period,
     period_from_filename,
@@ -234,7 +234,7 @@ def build_quality_report(
     outcomes: list[RuleOutcome] = []
     total = len(curated)
     meta.setdefault("unique_fichas", int(curated["CODIGO_FICHA"].nunique()) if total else 0)
-    meta.setdefault("total_hours", float(curated["TOTAL_HORAS"].sum()) if total else 0.0)
+    meta.setdefault("total_hours", round(float(curated["TOTAL_HORAS"].sum()), 2) if total else 0.0)
     meta.setdefault(
         "total_matriculados",
         int(curated["APRENDICES_MATRICULADOS"].sum()) if total else 0,
@@ -452,7 +452,7 @@ def build_quality_report(
         for column, parser, tolerance in (
             ("TOTAL_APRENDICES", parse_integer, 0.0),
             ("TOTAL_APRENDICES_ACTIVOS", parse_integer, 0.0),
-            ("TOTAL_HORAS", parse_decimal, 0.01 * max(source_rows, 1)),
+            ("TOTAL_HORAS", parse_hours, 0.01 * max(source_rows, 1)),
         ):
             source_sum, _ = _sum_metric(source, column, parser)
             curated_column = {
@@ -534,12 +534,13 @@ def build_quality_report(
     rounding_failures: list[str] = []
     rounding_total = 0
     if "TOTAL_HORAS" in source.columns:
+        report_period = parse_period(meta.get("period"))
         lookup: dict[tuple[int, int], float] = {}
         for _, row in curated.iterrows():
             key = (int(row["ID_PERIODO"]), int(row["CODIGO_FICHA"]))
             lookup[key] = float(row["TOTAL_HORAS"])
         for position, (_, row) in enumerate(source.iterrows(), start=1):
-            source_period = parse_period(row.get("IDPERIODO"))
+            source_period = parse_period(row.get("IDPERIODO")) or report_period
             source_ficha, ficha_error = parse_integer(row.get("IDENTIFICADOR_FICHA"))
             source_hours, hours_error, _ = quantize_hours(row.get("TOTAL_HORAS"))
             if source_period is None or ficha_error is not None or hours_error is not None:

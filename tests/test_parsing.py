@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 
+import pandas as pd
 import pytest
 
 from pe04_etl.normalize import (
@@ -9,9 +11,11 @@ from pe04_etl.normalize import (
     map_jornada,
     parse_composite,
     parse_decimal,
+    parse_hours,
     parse_integer,
     parse_period,
     period_from_filename,
+    period_from_preamble,
     quantize_hours,
 )
 
@@ -78,6 +82,48 @@ def test_quantize_hours_half_up_to_two_decimals():
     assert error is None
     assert value == Decimal("116.57")
     assert rounded is True
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("20", Decimal(20)),
+        ("20,5", Decimal("20.5")),
+        ("20:00", Decimal(20)),
+        ("24:00", Decimal(24)),
+        ("144:00", Decimal(144)),
+        ("1899-12-31T20:00:00.000", Decimal(20)),
+        ("1900-01-01T00:00:00.000", Decimal(24)),
+        ("1900-01-06T00:00:00.000", Decimal(144)),
+        ("1899-12-31T00:00:00.000", Decimal(0)),
+        (20.5, Decimal("20.5")),
+        (time(20, 0), Decimal(20)),
+        (timedelta(hours=144), Decimal(144)),
+        (datetime(1899, 12, 31, 20, 0), Decimal(20)),
+    ],
+)
+def test_parse_hours_accepts_excel_and_csv_durations(raw, expected):
+    value, error = parse_hours(raw)
+    assert error is None
+    assert value == expected
+
+
+def test_parse_hours_converts_minutes_not_centesimal_hours():
+    value, error = parse_hours("39:50")
+    assert error is None
+    assert value is not None
+    assert abs(value - Decimal("39.8333333")) < Decimal("0.0001")
+    assert quantize_hours("39:50") == (Decimal("39.83"), None, True)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["", None, "   ", "abc", "20:75", "20:61", "2026-06", datetime(2026, 6, 1)],
+)
+def test_parse_hours_rejects_invalid_or_non_duration_values(raw):
+    value, error = parse_hours(raw)
+    assert value is None
+    assert error is not None
 
 
 def test_composite_cell_is_split_into_atoms():
@@ -158,12 +204,26 @@ def test_parse_period(raw, expected):
     [
         ("PE-04_mayo 2026.xlsx", 202605),
         ("PE-04_202605.csv", 202605),
+        ("PE-04_JUN 2026.xml", 202606),
+        ("PE-04_ENERO 2026.csv", 202601),
+        ("PE-04_SEP 2026.xlsx", 202609),
+        ("PE-04_DIC 2026.csv", 202612),
         ("reporte_202612.xlsx", 202612),
         ("PE-04_sin_periodo.xlsx", None),
     ],
 )
 def test_period_from_filename(filename, expected):
     assert period_from_filename(filename) == expected
+
+
+def test_period_from_preamble_reads_period_before_header():
+    frame = pd.DataFrame([["PE-04_"], [None], ["202606"], ["CODIGO_REGIONAL"]])
+    assert period_from_preamble(frame, max_rows=3) == 202606
+
+
+def test_period_from_preamble_ignores_fichas_and_empty_values():
+    frame = pd.DataFrame([["PE-04_"], ["3533390"], [None]])
+    assert period_from_preamble(frame, max_rows=3) is None
 
 
 def test_clean_program_name_removes_numeric_prefix_and_collapses_spaces():

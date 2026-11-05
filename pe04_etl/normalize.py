@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
@@ -64,8 +65,42 @@ MESES_ES = {
     "diciembre": 12,
 }
 
+# Los nombres de archivo de Sofía Plus usan abreviaturas de tres letras
+# (por ejemplo, ``PE-04_JUN 2026.xml``). Se aceptan también variantes en inglés.
+MESES_ABREVIADOS = {
+    "ene": 1,
+    "feb": 2,
+    "mar": 3,
+    "abr": 4,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "ago": 8,
+    "sep": 9,
+    "sept": 9,
+    "set": 9,
+    "oct": 10,
+    "nov": 11,
+    "dic": 12,
+    "jan": 1,
+    "apr": 4,
+    "aug": 8,
+    "dec": 12,
+}
+
 MAX_HORAS = Decimal("99999999.99")
 CENTAVO = Decimal("0.01")
+
+# Excel representa duraciones como fracciones de día con epoch 1899-12-31.
+# Sofía Plus exporta TOTAL_HORAS así en XLSX y XML SpreadsheetML, y como
+# ``HH:MM`` en CSV; ninguna de esas formas es un decimal convencional.
+EXCEL_EPOCH = datetime(1899, 12, 31)
+_DURATION_CLOCK_RE = re.compile(
+    r"^(?P<hours>\d{1,7}):(?P<minutes>\d{1,2})(?::(?P<seconds>\d{1,2}(?:[.,]\d+)?))?$"
+)
+_DURATION_ISO_RE = re.compile(
+    r"^(?P<date>\d{4}-\d{2}-\d{2})(?:[T ](?P<clock>\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?))?$"
+)
 
 # UUID v5 determinista: misma clave natural => mismo identificador.
 # La especificación menciona UUID v4, pero v4 es aleatorio y rompe f(f(x))=f(x).
@@ -202,9 +237,95 @@ def parse_integer(value: Any) -> tuple[int | None, str | None]:
     return int(number), None
 
 
+def _seconds_to_hours(seconds: float) -> Decimal:
+    """Convierte segundos a horas sin introducir binario flotante adicional."""
+    return Decimal(str(seconds)) / Decimal(3600)
+
+
+def parse_hours(value: Any) -> tuple[Decimal | None, str | None]:
+    """Convierte duraciones de Excel/CSV a horas decimales.
+
+    Formas aceptadas:
+      * ``20`` o ``20,5`` -> horas decimales directas.
+      * ``20:00`` -> 20 horas; ``144:00`` -> 144 horas.
+      * ``39:50`` -> 39.8333... horas (horas y minutos, no centésimas).
+      * ``1899-12-31T20:00:00.000`` -> 20 horas.
+      * ``1900-01-06T00:00:00.000`` -> 144 horas.
+      * ``datetime.time`` y ``timedelta`` provenientes de openpyxl.
+    """
+    if is_missing(value):
+        return None, "VACIO"
+    if isinstance(value, bool):
+        return None, "NO_NUMERICO"
+
+    if isinstance(value, timedelta):
+        return _seconds_to_hours(value.total_seconds()), None
+
+    if isinstance(value, datetime):
+        if value.year >= 2000:
+            return None, "FECHA_NO_DURACION"
+        seconds = (
+            value.hour * 3600
+            + value.minute * 60
+            + value.second
+            + value.microsecond / 1_000_000
+        )
+        days = (value.date() - EXCEL_EPOCH.date()).days
+        if days < 0:
+            return None, "DURACION_NEGATIVA"
+        return Decimal(days) * 24 + _seconds_to_hours(seconds), None
+
+    if isinstance(value, date):
+        if value.year >= 2000:
+            return None, "FECHA_NO_DURACION"
+        days = (value - EXCEL_EPOCH.date()).days
+        if days < 0:
+            return None, "DURACION_NEGATIVA"
+        return Decimal(days) * 24, None
+
+    if isinstance(value, time):
+        seconds = (
+            value.hour * 3600
+            + value.minute * 60
+            + value.second
+            + value.microsecond / 1_000_000
+        )
+        return _seconds_to_hours(seconds), None
+
+    text = clean_text(value).replace(" ", "")
+    if not text:
+        return None, "VACIO"
+
+    clock_match = _DURATION_CLOCK_RE.fullmatch(text)
+    if clock_match:
+        hours = int(clock_match.group("hours"))
+        minutes = int(clock_match.group("minutes"))
+        seconds_text = clock_match.group("seconds") or "0"
+        seconds = Decimal(seconds_text.replace(",", "."))
+        if minutes >= 60 or seconds >= 60:
+            return None, "NO_NUMERICO"
+        return Decimal(hours) + Decimal(minutes) / 60 + seconds / 3600, None
+
+    iso_match = _DURATION_ISO_RE.fullmatch(text)
+    if iso_match:
+        try:
+            moment = datetime.fromisoformat(text)
+        except ValueError:
+            return None, "NO_NUMERICO"
+        return parse_hours(moment)
+
+    if re.match(r"^\d{4}-\d{2}", text):
+        return None, "FECHA_NO_DURACION"
+
+    number, error = parse_decimal(text)
+    if error:
+        return None, error
+    return number, None
+
+
 def quantize_hours(value: Any) -> tuple[Decimal | None, str | None, bool]:
     """Cuantiza a 2 decimales (ROUND_HALF_UP) y reporta si hubo cambio."""
-    number, error = parse_decimal(value)
+    number, error = parse_hours(value)
     if error:
         return None, error, False
     assert number is not None
@@ -271,9 +392,28 @@ def period_from_filename(filename: str) -> int | None:
         for month_name, month in MESES_ES.items():
             if re.search(rf"\b{month_name}\b", text):
                 return year * 100 + month
+        for month_name, month in MESES_ABREVIADOS.items():
+            if re.search(rf"\b{month_name}\b", text):
+                return year * 100 + month
         match_six = re.search(rf"(?<!\d){year}(0[1-9]|1[0-2])(?!\d)", text)
         if match_six:
             return year * 100 + int(match_six.group(1))
+    return None
+
+
+def period_from_preamble(frame: pd.DataFrame, max_rows: int = 5) -> int | None:
+    """Busca un periodo YYYYMM en las filas de preámbulo del reporte.
+
+    Algunos XML de Excel guardan el periodo en una celda suelta antes de la
+    cabecera y no incluyen la columna ``IDPERIODO``. Esta función recupera ese
+    dato sin confundirlo con fichas u otros identificadores numéricos.
+    """
+    limit = min(max_rows, len(frame))
+    for index in range(limit):
+        for value in frame.iloc[index].tolist():
+            period = parse_period(value)
+            if period is not None:
+                return period
     return None
 
 
@@ -771,7 +911,7 @@ def normalize_dataframe(
     meta.rows_in_review = int((curated["ESTADO_REGISTRO"] == "REVISAR").sum())
     meta.rows_rounded = rounded_count
     meta.unique_fichas = int(curated["CODIGO_FICHA"].nunique())
-    meta.total_hours = float(curated["TOTAL_HORAS"].sum())
+    meta.total_hours = round(float(curated["TOTAL_HORAS"].sum()), 2)
     meta.total_matriculados = int(curated["APRENDICES_MATRICULADOS"].sum())
     meta.total_activos = int(curated["APRENDICES_ACTIVOS"].sum())
     meta.source_rows_nonblank = len(frame)

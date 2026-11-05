@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import sys
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 import pandas as pd
 import pytest
@@ -103,6 +104,52 @@ def write_csv(
     with open(path, "w", encoding=encoding, newline="") as handle:
         writer = csv.writer(handle, delimiter=delimiter, lineterminator="\n")
         writer.writerows(matrix)
+    return path
+
+
+def write_excel_xml(
+    path: Path,
+    rows: list[dict],
+    *,
+    header_row: int = 4,
+    preamble=None,
+    columns: list[str] | None = None,
+    datetime_columns: tuple[str, ...] = ("TOTAL_HORAS",),
+) -> Path:
+    """Genera un XML SpreadsheetML 2003 equivalente a un reporte PE-04."""
+    from pe04_etl.io import normalize_header_name
+
+    columns = list(columns or BASE_COLUMNS)
+    matrix = _matrix(rows, columns, header_row, preamble)
+    width = max(len(row) for row in matrix)
+    datetime_names = {normalize_header_name(name) for name in datetime_columns}
+    header_names = [normalize_header_name(column) for column in columns]
+
+    def cell_xml(value, column_name: str | None = None) -> str:
+        if value is None or value == "":
+            return "<Cell/>"
+        column_key = normalize_header_name(column_name) if column_name else ""
+        cell_type = "DateTime" if column_key in datetime_names else "String"
+        return f'<Cell><Data ss:Type="{cell_type}">{escape(str(value))}</Data></Cell>'
+
+    lines = [
+        '<?xml version="1.0"?>',
+        '<?mso-application progid="Excel.Sheet"?>',
+        '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"',
+        ' xmlns:o="urn:schemas-microsoft-com:office:office"',
+        ' xmlns:x="urn:schemas-microsoft-com:office:excel"',
+        ' xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">',
+        '<Worksheet ss:Name="Reporte">',
+        f'<Table ss:ExpandedColumnCount="{width}" ss:ExpandedRowCount="{len(matrix)}">',
+    ]
+    for row in matrix:
+        cells = []
+        for index, value in enumerate(row):
+            column_name = header_names[index] if index < len(header_names) else None
+            cells.append(cell_xml(value, column_name))
+        lines.append(f"<Row>{''.join(cells)}</Row>")
+    lines.extend(["</Table>", "</Worksheet>", "</Workbook>"])
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
 
 

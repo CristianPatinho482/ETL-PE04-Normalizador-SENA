@@ -22,6 +22,8 @@ REJECTED_FILENAME = "pe04_rechazados.csv"
 METADATA_FILENAME = "pe04_metadata.json"
 QUALITY_JSON_FILENAME = "pe04_quality_report.json"
 QUALITY_HTML_FILENAME = "pe04_quality_dashboard.html"
+BATCH_MANIFEST_FILENAME = "pe04_batch_manifest.json"
+QUALITY_BATCH_FILENAME = "pe04_quality_batch.json"
 
 
 def _replace_with_retry(
@@ -155,6 +157,22 @@ def write_metadata_json(metadata: ProcessingMetadata, base_output_dir: str | Pat
     target = Path(base_output_dir) / str(int(metadata.period)) / METADATA_FILENAME
     payload = json.dumps(metadata.to_dict(), ensure_ascii=False, indent=2)
     _atomic_write_text(target, payload + "\n")
+    return str(target)
+
+
+def write_batch_manifest(payload: dict[str, Any], output_dir: str | Path) -> str:
+    """Escribe el manifiesto de una ejecución por lote."""
+    target = Path(output_dir) / BATCH_MANIFEST_FILENAME
+    text = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+    _atomic_write_text(target, text + "\n")
+    return str(target)
+
+
+def write_quality_batch_json(payload: dict[str, Any], output_dir: str | Path) -> str:
+    """Escribe el resumen de calidad de todos los periodos de un lote."""
+    target = Path(output_dir) / QUALITY_BATCH_FILENAME
+    text = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+    _atomic_write_text(target, text + "\n")
     return str(target)
 
 

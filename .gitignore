@@ -11,6 +11,9 @@ htmlcov/
 data/curated/
 data/curated_run/
 reports/
+PE04/
+PE-04_*.csv
+PE-04_*.xml
 
 # Datos institucionales y documentos de trabajo
 *.xlsx

@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-MODULE_VERSION = "1.1.0"
+MODULE_VERSION = "1.2.0"
 MODULE_ID = "ETL-PE04-NORMALIZER"
 
 
