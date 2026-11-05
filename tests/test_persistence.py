@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from pe04_etl.persist import CURATED_FILENAME, _replace_with_retry, write_curated_csv
+from pe04_etl.persist import _replace_with_retry, curated_filename, write_curated_csv
 from pe04_etl.pipeline import run_pipeline
 from tests.conftest import BASE_COLUMNS, sample_row, write_xlsx
 
@@ -15,7 +15,8 @@ def test_output_is_partitioned_with_bom_and_sidecar(tmp_path, source_two_rows):
     result = run_pipeline(source_two_rows, tmp_path / "curated")
     path = Path(result.paths["curated"])
     assert path.parent.name == "202605"
-    assert path.name == CURATED_FILENAME
+    assert path.name == "pe04_curated_2026_05.csv"
+    assert path.name == curated_filename(202605)
     data = path.read_bytes()
     assert data.startswith(b"\xef\xbb\xbf")
     assert b";" in data

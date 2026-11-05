@@ -71,6 +71,8 @@ Resultado de referencia:
   redondeadas; 23/23 reglas aprobadas, estado APTO.
 - El XML y el CSV de junio producen exactamente los mismos UUID y el mismo
   total de horas (63,871.69), lo que confirma la equivalencia entre formatos.
+- Lote real de `PE04` (junio–septiembre 2026): 4 archivos, 4 periodos,
+  2.545 registros curados, 0 rechazados, 0 conflictos y 4 tableros APTO.
 
 ## 4. Qué cubre cada tipo de prueba
 
@@ -192,6 +194,11 @@ reports/PE04/202605/pe04_quality_report.json
    el mismo periodo, el lote los marca `CONFLICT` y omite la partición en vez
    de sobrescribir silenciosamente. La decisión queda registrada en
    `pe04_batch_manifest.json`.
+8. **Nombre del archivo curado.** El CSV normalizado se llama
+   `pe04_curated_AAAA_MM.csv` (por ejemplo, `pe04_curated_2026_06.csv`) para
+   que el periodo sea visible en el propio nombre, además de la carpeta de
+   partición `YYYYMM`. La auditoría y los rechazos conservan nombres estables
+   dentro de cada partición.
 
 ## 6. Pruebas adicionales recomendadas (opcionales)
 

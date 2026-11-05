@@ -7,6 +7,7 @@ import pytest
 
 from pe04_etl.contracts import ContractViolation
 from pe04_etl.io import discover_sources
+from pe04_etl.persist import curated_filename
 from pe04_etl.pipeline import run_batch
 from tests.conftest import BASE_COLUMNS, sample_row, write_csv, write_excel_xml
 
@@ -53,7 +54,7 @@ def test_run_batch_processes_each_period_in_its_partition(tmp_path):
     assert [item.status for item in batch.items] == ["OK", "OK"]
     for period in (202601, 202602):
         partition = output / str(period)
-        assert (partition / "pe04_curated.csv").exists()
+        assert (partition / curated_filename(period)).exists()
         assert (partition / "pe04_auditoria.csv").exists()
         assert (partition / "pe04_metadata.json").exists()
 
@@ -93,7 +94,7 @@ def test_duplicate_period_marks_conflict_and_skips_partition(tmp_path):
     assert batch.files_total == 2
     assert len(batch.conflict_items) == 2
     assert batch.periods == []
-    assert not (output / "202601" / "pe04_curated.csv").exists()
+    assert not (output / "202601" / curated_filename(202601)).exists()
     assert all("duplicado" in (item.error or "") for item in batch.conflict_items)
 
     manifest = json.loads(Path(batch.manifest_path).read_text(encoding="utf-8"))
@@ -117,7 +118,7 @@ def test_run_batch_continues_after_a_broken_file(tmp_path):
         "PE-04_ENERO 2026.csv": "OK",
     }
     assert batch.periods == [202601]
-    assert (output / "202601" / "pe04_curated.csv").exists()
+    assert (output / "202601" / curated_filename(202601)).exists()
     assert batch.has_errors is True
 
 
@@ -150,7 +151,7 @@ def test_run_batch_excludes_previous_outputs_from_next_run(tmp_path):
     output = tmp_path / "out"
 
     first = run_batch(source, output)
-    curated_path = output / "202601" / "pe04_curated.csv"
+    curated_path = output / "202601" / curated_filename(202601)
     first_bytes = curated_path.read_bytes()
     second = run_batch(source, output)
 

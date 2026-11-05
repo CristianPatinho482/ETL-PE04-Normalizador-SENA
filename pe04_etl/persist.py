@@ -16,7 +16,7 @@ import pandas as pd
 
 from .contracts import ContractViolation, ProcessingMetadata, precondition
 
-CURATED_FILENAME = "pe04_curated.csv"
+CURATED_FILENAME_TEMPLATE = "pe04_curated_{year}_{month}.csv"
 AUDIT_FILENAME = "pe04_auditoria.csv"
 REJECTED_FILENAME = "pe04_rechazados.csv"
 METADATA_FILENAME = "pe04_metadata.json"
@@ -105,6 +105,20 @@ def _write_sidecar(target: Path, digest: str) -> Path:
     return sidecar
 
 
+def curated_filename(period: int | None) -> str:
+    """Nombre del CSV curado con año y mes: ``pe04_curated_2026_05.csv``."""
+    precondition(period is not None, "No se puede construir el nombre sin periodo.")
+    period_text = str(int(period))
+    precondition(
+        len(period_text) == 6 and period_text.isdigit(),
+        f"Periodo de partición inválido: {period!r}",
+    )
+    return CURATED_FILENAME_TEMPLATE.format(
+        year=period_text[:4],
+        month=period_text[4:],
+    )
+
+
 def write_curated_csv(
     frame: pd.DataFrame,
     base_output_dir: str | Path,
@@ -112,11 +126,7 @@ def write_curated_csv(
 ) -> dict[str, Any]:
     precondition(period is not None, "No se puede persistir sin un periodo de proceso.")
     period_text = str(int(period))
-    precondition(
-        len(period_text) == 6 and period_text.isdigit(),
-        f"Periodo de partición inválido: {period!r}",
-    )
-    target = Path(base_output_dir) / period_text / CURATED_FILENAME
+    target = Path(base_output_dir) / period_text / curated_filename(period)
     data = _csv_bytes(frame, float_format="%.2f")
     _atomic_write_bytes(target, data)
     digest = sha256_bytes(data)

@@ -67,12 +67,15 @@ python etl_pe04_normalizer.py --source "PE-04_JUN 2026.xml" --period 202606
 Salidas para un periodo:
 
 ```text
-data/curated/PE04/202606/pe04_curated.csv
+data/curated/PE04/202606/pe04_curated_2026_06.csv
 data/curated/PE04/202606/pe04_auditoria.csv
 data/curated/PE04/202606/pe04_rechazados.csv
 data/curated/PE04/202606/pe04_metadata.json
-data/curated/PE04/202606/pe04_curated.csv.sha256
+data/curated/PE04/202606/pe04_curated_2026_06.csv.sha256
 ```
+
+El archivo normalizado incluye el periodo en su nombre con el formato
+`pe04_curated_AAAA_MM.csv`; la carpeta de partición conserva `YYYYMM`.
 
 ## Ejecución por carpeta
 
@@ -142,6 +145,8 @@ Resultado de referencia:
   0 fallos críticos, estado **APTO**.
 - XML de junio: 529 registros curados, 0 rechazados, 123 horas redondeadas,
   `TOTAL_HORAS` total = 63,871.69.
+- Lote real de `PE04` (junio–septiembre 2026): 4 archivos, 4 periodos,
+  2.545 registros curados, 0 rechazados y 4 tableros en estado **APTO**.
 
 ## Dependencias
 

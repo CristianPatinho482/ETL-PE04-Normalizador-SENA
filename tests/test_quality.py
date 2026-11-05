@@ -131,7 +131,7 @@ def test_report_is_json_serializable(tmp_path, source_two_rows):
 
 def test_artifact_integrity_detects_missing_sidecar(tmp_path, source_two_rows):
     result = run_pipeline(source_two_rows, tmp_path / "curated")
-    sidecar = Path(result.paths["curated"]).with_name("pe04_curated.csv.sha256")
+    sidecar = Path(str(result.paths["curated"]) + ".sha256")
     sidecar.unlink()
     report = _report(result)
     assert {item.rule_id: item for item in report.outcomes}["DQ-19"].status == "WARN"
